@@ -75,6 +75,8 @@ A FastAPI backend for the PDF-RAG application. Provides RAG-powered Q&A with pre
    docker-compose up -d
    ```
 
+PostgreSQL is exposed on [http://localhost:5433](http://localhost:5433) to avoid conflicts with local installs.
+
 The API will be available at [http://localhost:8000](http://localhost:8000).
 
 ## 📚 API Documentation
