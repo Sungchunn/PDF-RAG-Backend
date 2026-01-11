@@ -105,5 +105,6 @@ logs/
 *.log
 
 # Database
+/db/
 *.db
 *.sqlite3

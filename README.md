@@ -17,6 +17,7 @@ A FastAPI backend for the PDF-RAG application. Provides RAG-powered Q&A with pre
 ## 📋 Prerequisites
 
 - **Python** 3.10+
+- **Poetry** (dependency management)
 - **Docker** (for PostgreSQL with pgvector)
 - **OpenAI API Key**
 
@@ -29,26 +30,18 @@ A FastAPI backend for the PDF-RAG application. Provides RAG-powered Q&A with pre
    cd Backend
    ```
 
-2. **Create virtual environment:**
+2. **Install dependencies:**
    ```bash
-   python -m venv venv
-   source venv/bin/activate  # macOS/Linux
-   # or
-   .\venv\Scripts\activate   # Windows
+   poetry install
    ```
 
-3. **Install dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. **Set up environment:**
+3. **Set up environment:**
    ```bash
    cp .env.example .env
    # Edit .env and add your OPENAI_API_KEY
    ```
 
-5. **Start PostgreSQL with pgvector:**
+4. **Start PostgreSQL with pgvector:**
    ```bash
    docker run -d --name pdfrag-db \
      -e POSTGRES_USER=postgres \
@@ -58,9 +51,9 @@ A FastAPI backend for the PDF-RAG application. Provides RAG-powered Q&A with pre
      pgvector/pgvector:pg16
    ```
 
-6. **Run the server:**
+5. **Run the server:**
    ```bash
-   uvicorn app.main:app --reload
+   poetry run uvicorn app.main:app --reload
    ```
 
 ### Option 2: Docker Compose (Recommended)
@@ -128,7 +121,8 @@ Backend/
 ├── Dockerfile
 ├── docker-compose.yml
 ├── pyproject.toml
-├── requirements.txt
+├── poetry.lock
+├── poetry.toml
 └── README.md
 ```
 
@@ -148,10 +142,10 @@ Backend/
 
 ```bash
 # Run tests
-pytest
+poetry run pytest
 
 # With coverage
-pytest --cov=app
+poetry run pytest --cov=app
 ```
 
 ## 🐳 Docker Commands
@@ -174,8 +168,8 @@ docker-compose down -v
 
 1. Create a feature branch: `git checkout -b feature/your-feature`
 2. Make your changes
-3. Run linting: `ruff check .`
-4. Run tests: `pytest`
+3. Run linting: `poetry run ruff check .`
+4. Run tests: `poetry run pytest`
 5. Commit with clear messages
 6. Push and create a Pull Request
 

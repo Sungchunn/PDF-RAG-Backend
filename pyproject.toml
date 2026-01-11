@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "A FastAPI backend for PDF RAG with precision citations"
 readme = "README.md"
 license = { text = "MIT" }
-requires-python = ">=3.10"
+requires-python = ">=3.10,<4.0"
 authors = [
     { name = "PDF-RAG Team" }
 ]
@@ -53,6 +53,9 @@ dev = [
 "Homepage" = "https://github.com/Sungchunn/PDF-RAG-Backend"
 "Repository" = "https://github.com/Sungchunn/PDF-RAG-Backend"
 
+[tool.poetry]
+package-mode = false
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["app*"]
@@ -70,6 +73,10 @@ python_version = "3.10"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
