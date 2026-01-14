@@ -3,6 +3,9 @@ Database connection and session management.
 Uses SQLAlchemy async with PostgreSQL and pgvector.
 """
 
+from typing import AsyncGenerator
+
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 
@@ -42,7 +45,7 @@ class Base(DeclarativeBase):
     pass
 
 
-async def get_db_session() -> AsyncSession:
+async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
     """Get an async database session."""
     async with async_session_maker() as session:
         try:
@@ -56,9 +59,16 @@ async def get_db_session() -> AsyncSession:
 
 
 async def init_db():
-    """Initialize database tables."""
+    """Initialize database tables.
+
+    Note: Prefer using Flyway migrations for schema changes.
+    This function is mainly for development/testing.
+    """
+    # Import all models to register them with Base.metadata
+    from app.db import models  # noqa: F401
+
     async with engine.begin() as conn:
         # Create pgvector extension if not exists
-        await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         # Create all tables
         await conn.run_sync(Base.metadata.create_all)
