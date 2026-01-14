@@ -23,6 +23,16 @@ from app.db.models.citation import (
     CitationModel,
     MessageCitationModel,
 )
+from app.db.models.conversation import (
+    ConversationModel,
+    MessageModel,
+)
+from app.db.models.processing import (
+    ProcessingJobModel,
+    ProcessingJobStageModel,
+    ProcessingJobItemModel,
+    IdempotencyKeyModel,
+)
 
 __all__ = [
     # User
@@ -42,4 +52,12 @@ __all__ = [
     # Citation
     "CitationModel",
     "MessageCitationModel",
+    # Conversation
+    "ConversationModel",
+    "MessageModel",
+    # Processing
+    "ProcessingJobModel",
+    "ProcessingJobStageModel",
+    "ProcessingJobItemModel",
+    "IdempotencyKeyModel",
 ]
