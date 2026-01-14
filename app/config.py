@@ -35,6 +35,15 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o"
     openai_embedding_model: str = "text-embedding-3-small"
 
+    # LLM/Embedding Providers
+    llm_provider: str = "openai"
+    embedding_provider: str = "openai"
+
+    # Gemini
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-1.5-flash"
+    gemini_embedding_model: str = "text-embedding-004"
+
     # LlamaIndex / RAG Configuration
     chunk_size: int = 512
     chunk_overlap: int = 50
@@ -46,6 +55,12 @@ class Settings(BaseSettings):
 
     # CORS
     cors_origins: list[str] = ["http://localhost:3000"]
+
+    # JWT Authentication
+    jwt_secret_key: str = "change-me-in-production-use-secure-random-key"
+    jwt_algorithm: str = "HS256"
+    jwt_access_expire_minutes: int = 30
+    jwt_refresh_expire_days: int = 7
 
 
 @lru_cache()
