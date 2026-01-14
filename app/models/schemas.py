@@ -24,6 +24,8 @@ class Citation(BaseModel):
     documentId: str = Field(..., description="Source document ID")
     pageNumber: int = Field(..., ge=1, description="Page number (1-indexed)")
     boundingBox: BoundingBox = Field(..., description="Text location coordinates")
+    lineStart: Optional[int] = Field(None, ge=1, description="Starting line number (1-indexed)")
+    lineEnd: Optional[int] = Field(None, ge=1, description="Ending line number (1-indexed)")
     text: str = Field(..., description="Cited text content")
     confidence: float = Field(
         ..., ge=0.0, le=1.0, description="Confidence score"
@@ -65,6 +67,15 @@ class ChatRequest(BaseModel):
 
     message: str = Field(..., min_length=1, max_length=5000, description="User message")
     documentId: Optional[str] = Field(None, description="Optional specific document to query")
+    provider: Optional[str] = Field(
+        None,
+        pattern="^(openai|gemini)$",
+        description="Optional LLM provider override",
+    )
+    model: Optional[str] = Field(
+        None,
+        description="Optional LLM model override (provider-specific)",
+    )
 
 
 class ChatResponse(BaseModel):
@@ -86,5 +97,7 @@ class DocumentChunk(BaseModel):
     documentId: str = Field(..., description="Parent document ID")
     pageNumber: int = Field(..., ge=1, description="Source page number")
     boundingBox: BoundingBox = Field(..., description="Text location")
+    lineStart: Optional[int] = Field(None, ge=1, description="Starting line number")
+    lineEnd: Optional[int] = Field(None, ge=1, description="Ending line number")
     text: str = Field(..., description="Chunk text content")
     embedding: Optional[List[float]] = Field(None, description="Vector embedding")
