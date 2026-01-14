@@ -61,7 +61,7 @@ class RAGEngine:
         if not LLAMAINDEX_AVAILABLE:
             raise ImportError(
                 "LlamaIndex is required for RAG. "
-                "Install with: pip install llama-index"
+                "Install with: poetry add llama-index"
             )
 
         # Configure LlamaIndex settings

@@ -48,7 +48,7 @@ class PDFParser:
         if fitz is None:
             raise ImportError(
                 "PyMuPDF (fitz) is required for PDF parsing. "
-                "Install with: pip install pymupdf"
+                "Install with: poetry add pymupdf"
             )
 
     def parse(self, file_path: str) -> ParsedDocument:

@@ -21,6 +21,8 @@ A FastAPI backend for the PDF-RAG application. Provides RAG-powered Q&A with pre
 - **Docker** (for PostgreSQL with pgvector)
 - **OpenAI API Key**
 
+Dependencies are managed with Poetry; this repo does not use `requirements.txt`.
+
 ## ⚙️ Installation
 
 ### Option 1: Local Development
