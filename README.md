@@ -19,7 +19,7 @@ A FastAPI backend for the PDF-RAG application. Provides RAG-powered Q&A with pre
 - **Python** 3.10+
 - **Poetry** (dependency management)
 - **Docker** (for PostgreSQL with pgvector)
-- **OpenAI API Key**
+- **OpenAI or Gemini API Key** (for LLM + embeddings)
 
 Dependencies are managed with Poetry; this repo does not use `requirements.txt`.
 
@@ -40,7 +40,12 @@ Dependencies are managed with Poetry; this repo does not use `requirements.txt`.
 3. **Set up environment:**
    ```bash
    cp .env.example .env
-   # Edit .env and add your OPENAI_API_KEY
+   # Edit .env and add your OPENAI_API_KEY and/or GEMINI_API_KEY
+   ```
+
+   If you plan to use Gemini, install the extra LlamaIndex packages:
+   ```bash
+   poetry add llama-index-llms-gemini llama-index-embeddings-gemini
    ```
 
 4. **Start PostgreSQL with pgvector:**
@@ -63,6 +68,7 @@ Dependencies are managed with Poetry; this repo does not use `requirements.txt`.
 1. **Set environment variable:**
    ```bash
    export OPENAI_API_KEY=sk-your-key-here
+   # or export GEMINI_API_KEY=your-key-here
    ```
 
 2. **Start services:**
@@ -74,7 +80,10 @@ PostgreSQL is exposed on [http://localhost:5433](http://localhost:5433) to avoid
 
 The API will be available at [http://localhost:8000](http://localhost:8000).
 
-## 📚 API Documentation
+## 📚 Documentation
+
+- **[Architecture & Math Logic](docs/ARCHITECTURE_AND_MATH.md):** Deep dive into the RAG implementation, vector math, and engineering decisions.
+- **[API Specification](docs/API_SPECIFICATION.md):** Detailed API contract.
 
 Once running, access interactive API docs:
 
@@ -132,13 +141,30 @@ Backend/
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `LLM_PROVIDER` | `openai` | LLM provider (`openai` or `gemini`) |
+| `EMBEDDING_PROVIDER` | `openai` | Embedding provider (`openai` or `gemini`) |
 | `OPENAI_API_KEY` | - | **Required.** Your OpenAI API key |
 | `DATABASE_URL` | `postgresql://...` | PostgreSQL connection URL |
 | `OPENAI_MODEL` | `gpt-4o` | LLM model for generation |
 | `OPENAI_EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model |
+| `GEMINI_API_KEY` | - | **Required for Gemini.** Your Gemini API key |
+| `GEMINI_MODEL` | `gemini-1.5-flash` | LLM model for Gemini |
+| `GEMINI_EMBEDDING_MODEL` | `text-embedding-004` | Embedding model for Gemini |
 | `CHUNK_SIZE` | `512` | Text chunk size for indexing |
 | `CHUNK_OVERLAP` | `50` | Overlap between chunks |
 | `SIMILARITY_TOP_K` | `5` | Number of chunks to retrieve |
+
+To override the LLM per request, include `provider` and `model` in the
+`/api/chat/` body. Example:
+
+```json
+{
+  "message": "Summarize this PDF",
+  "documentId": "doc-id",
+  "provider": "gemini",
+  "model": "gemini-1.5-flash"
+}
+```
 
 ## 🧪 Testing
 

@@ -9,7 +9,8 @@ from uuid import uuid4
 
 from app.config import settings
 from app.core.pdf_parser import get_pdf_parser, ParsedDocument
-from app.core.rag_engine import get_rag_engine
+from app.core.rag_engine import RAGEngine
+from app.db.database import async_session_maker
 from app.models.schemas import Document, DocumentUploadResponse
 
 
@@ -42,6 +43,8 @@ class DocumentService:
             size=size,
             uploadedAt=datetime.utcnow(),
             status="processing",
+            pageCount=None,
+            errorMessage=None,
         )
         self._documents[document_id] = doc
 
@@ -62,8 +65,14 @@ class DocumentService:
             doc.pageCount = parsed.page_count
 
             # Index in RAG engine
-            rag_engine = get_rag_engine()
-            success = rag_engine.index_document(document_id, parsed.blocks)
+            success = False
+            async with async_session_maker() as session:
+                rag_engine = RAGEngine(session)
+                success = await rag_engine.index_document(document_id, parsed.blocks)
+                if success:
+                    await session.commit()
+                else:
+                    await session.rollback()
 
             if success:
                 doc.status = "ready"
@@ -96,8 +105,13 @@ class DocumentService:
 
         # Remove from RAG engine
         try:
-            rag_engine = get_rag_engine()
-            rag_engine.remove_document(document_id)
+            async with async_session_maker() as session:
+                rag_engine = RAGEngine(session)
+                removed = await rag_engine.remove_document(document_id)
+                if removed:
+                    await session.commit()
+                else:
+                    await session.rollback()
         except Exception:
             pass
 

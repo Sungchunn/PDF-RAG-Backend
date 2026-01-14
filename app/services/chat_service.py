@@ -4,7 +4,8 @@ Chat service for RAG-powered Q&A.
 
 from typing import Optional, List
 
-from app.core.rag_engine import get_rag_engine, RAGResponse
+from app.core.rag_engine import RAGEngine, RAGResponse
+from app.db.database import async_session_maker
 from app.models.schemas import ChatResponse, Citation, BoundingBox
 
 
@@ -15,6 +16,8 @@ class ChatService:
         self,
         message: str,
         document_id: Optional[str] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> ChatResponse:
         """
         Process a chat message and return RAG-powered response.
@@ -27,8 +30,14 @@ class ChatService:
             ChatResponse with answer and citations
         """
         try:
-            rag_engine = get_rag_engine()
-            rag_response: RAGResponse = rag_engine.query(message, document_id)
+            async with async_session_maker() as session:
+                rag_engine = RAGEngine(session)
+                rag_response: RAGResponse = await rag_engine.query(
+                    message,
+                    document_id,
+                    llm_provider=provider,
+                    llm_model=model,
+                )
 
             # Convert contexts to citations
             citations: List[Citation] = []
@@ -42,6 +51,8 @@ class ChatService:
                         x1=ctx.bbox_x1,
                         y1=ctx.bbox_y1,
                     ),
+                    lineStart=ctx.line_start,
+                    lineEnd=ctx.line_end,
                     text=ctx.text[:200] + "..." if len(ctx.text) > 200 else ctx.text,
                     confidence=ctx.score,
                 )
