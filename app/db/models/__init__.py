@@ -15,6 +15,14 @@ from app.db.models.document import (
     TagModel,
     DocumentTagLinkModel,
 )
+from app.db.models.chunk import (
+    DocumentChunkModel,
+    ChunkVectorModel,
+)
+from app.db.models.citation import (
+    CitationModel,
+    MessageCitationModel,
+)
 
 __all__ = [
     # User
@@ -28,4 +36,10 @@ __all__ = [
     "DocumentPageBlockModel",
     "TagModel",
     "DocumentTagLinkModel",
+    # Chunk
+    "DocumentChunkModel",
+    "ChunkVectorModel",
+    # Citation
+    "CitationModel",
+    "MessageCitationModel",
 ]
