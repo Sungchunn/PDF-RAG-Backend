@@ -1,9 +1,9 @@
 """
 PDF parsing utilities using PyMuPDF (fitz).
-Extracts text with spatial layout (coordinates) for precision citations.
+Extracts text with spatial layout (coordinates) and line numbers for precision citations.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 import os
 
@@ -15,7 +15,7 @@ except ImportError:
 
 @dataclass
 class TextBlock:
-    """A block of text extracted from a PDF with coordinates."""
+    """A block of text extracted from a PDF with coordinates and line numbers."""
 
     text: str
     page_number: int  # 1-indexed
@@ -24,6 +24,9 @@ class TextBlock:
     x1: float
     y1: float
     block_type: str = "text"  # 'text' or 'image'
+    block_index: int = 0  # Position within page
+    line_start: int = 0  # Starting line number (1-indexed, document-wide)
+    line_end: int = 0  # Ending line number (1-indexed, document-wide)
 
 
 @dataclass
@@ -32,7 +35,8 @@ class ParsedDocument:
 
     filename: str
     page_count: int
-    blocks: List[TextBlock]
+    blocks: List[TextBlock] = field(default_factory=list)
+    total_lines: int = 0  # Total line count across entire document
     error: Optional[str] = None
 
 
@@ -53,13 +57,13 @@ class PDFParser:
 
     def parse(self, file_path: str) -> ParsedDocument:
         """
-        Parse a PDF file and extract text blocks with coordinates.
-        
+        Parse a PDF file and extract text blocks with coordinates and line numbers.
+
         Args:
             file_path: Path to the PDF file
-            
+
         Returns:
-            ParsedDocument with extracted text blocks
+            ParsedDocument with extracted text blocks including line numbers
         """
         if not os.path.exists(file_path):
             return ParsedDocument(
@@ -72,18 +76,25 @@ class PDFParser:
         try:
             doc = fitz.open(file_path)
             blocks: List[TextBlock] = []
+            global_line_number = 0  # Running line count across all pages
 
             for page_num, page in enumerate(doc, start=1):
                 # Get text blocks with position info
                 # Each block: (x0, y0, x1, y1, "text", block_no, block_type)
                 page_blocks = page.get_text("blocks")
 
-                for block in page_blocks:
-                    if len(block) >= 5 and block[6] == 0:  # Text block (not image)
+                for block_idx, block in enumerate(page_blocks):
+                    if len(block) >= 7 and block[6] == 0:  # Text block (not image)
                         x0, y0, x1, y1, text = block[:5]
                         text = text.strip()
 
                         if text:  # Skip empty blocks
+                            # Count lines in this block
+                            line_count = text.count("\n") + 1
+                            line_start = global_line_number + 1
+                            line_end = global_line_number + line_count
+                            global_line_number = line_end
+
                             blocks.append(
                                 TextBlock(
                                     text=text,
@@ -93,15 +104,20 @@ class PDFParser:
                                     x1=x1,
                                     y1=y1,
                                     block_type="text",
+                                    block_index=block_idx,
+                                    line_start=line_start,
+                                    line_end=line_end,
                                 )
                             )
 
+            page_count = len(doc)
             doc.close()
 
             return ParsedDocument(
                 filename=os.path.basename(file_path),
-                page_count=len(doc) if doc else 0,
+                page_count=page_count,
                 blocks=blocks,
+                total_lines=global_line_number,
             )
 
         except Exception as e:
