@@ -105,6 +105,10 @@ logs/
 *.log
 
 # Database
-/db/
 *.db
 *.sqlite3
+
+# Keep db/migration tracked for Flyway
+!/db/
+/db/*
+!/db/migration/
