@@ -3,12 +3,10 @@ Background worker for document processing.
 """
 
 import logging
-from datetime import datetime, timezone
-
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.pdf_parser import get_pdf_parser
 from app.core.rag_engine import RAGEngine
+from app.db.database import async_session_maker
 from app.db.models import DocumentModel
 from app.services.processing_service import (
     ProcessingService,
@@ -20,7 +18,6 @@ logger = logging.getLogger(__name__)
 
 
 async def process_document_task(
-    session: AsyncSession,
     job_id: str,
     document_id: str,
     file_path: str,
@@ -29,13 +26,14 @@ async def process_document_task(
     """
     Background task for document processing.
 
+    Creates its own database session to avoid request session lifecycle issues.
+
     Stages:
     1. Parse PDF (extract text, bboxes, line numbers)
     2. Generate embeddings and store in pgvector
     3. Update document status
 
     Args:
-        session: Database session
         job_id: Processing job ID
         document_id: Document ID
         file_path: Path to PDF file
@@ -44,6 +42,24 @@ async def process_document_task(
     Returns:
         True if successful
     """
+    async with async_session_maker() as session:
+        try:
+            result = await _process_document(session, job_id, document_id, file_path, user_id)
+            await session.commit()
+            return result
+        except Exception:
+            await session.rollback()
+            raise
+
+
+async def _process_document(
+    session,
+    job_id: str,
+    document_id: str,
+    file_path: str,
+    user_id: str,
+) -> bool:
+    """Internal processing logic with provided session."""
     processing = ProcessingService(session)
 
     try:

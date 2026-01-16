@@ -68,7 +68,7 @@ def format_document(doc: DocumentModel) -> DocumentResponse:
         mimeType=doc.mime_type,
         status=doc.status,
         pageCount=doc.page_count,
-        uploadedAt=format_datetime(doc.uploaded_at),
+        uploadedAt=format_datetime(doc.uploaded_at) or "",
         deletedAt=format_datetime(doc.deleted_at),
     )
 
@@ -146,10 +146,9 @@ async def upload_document(
     job = await processing.create_job(document_id, JobType.DOCUMENT_UPLOAD)
     await session.flush()
 
-    # Queue background processing
+    # Queue background processing (creates its own session)
     background_tasks.add_task(
         process_document_task,
-        session,
         job.id,
         document_id,
         file_path,

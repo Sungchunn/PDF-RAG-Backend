@@ -4,8 +4,9 @@ Uses Pydantic Settings for environment variable management.
 """
 
 from functools import lru_cache
+
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import Optional
 
 
 class Settings(BaseSettings):
@@ -61,6 +62,17 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_access_expire_minutes: int = 30
     jwt_refresh_expire_days: int = 7
+
+    @model_validator(mode="after")
+    def validate_jwt_secret(self) -> "Settings":
+        """Validate JWT secret is not the default value in production."""
+        default_secret = "change-me-in-production-use-secure-random-key"
+        if self.environment == "production" and self.jwt_secret_key == default_secret:
+            raise ValueError(
+                "JWT_SECRET_KEY must be set to a secure random value in production. "
+                "Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(32))\""
+            )
+        return self
 
 
 @lru_cache()
