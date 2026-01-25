@@ -50,6 +50,43 @@ class Settings(BaseSettings):
     chunk_overlap: int = 50
     similarity_top_k: int = 5
 
+    # Embedding Configuration (Cost Optimization)
+    embedding_dimensions: int = 512
+    """Matryoshka embedding dimension. Options: 256, 512, 1024, 1536.
+    Lower = faster search + less storage, slightly lower quality.
+    512 recommended for cost/quality balance."""
+    use_matryoshka: bool = True
+    """Enable Matryoshka dimension reduction."""
+
+    # Hybrid Search Configuration
+    use_hybrid_search: bool = True
+    """Enable BM25 + vector hybrid search."""
+    bm25_candidate_limit: int = 100
+    """Number of candidates from BM25 before vector reranking.
+    Higher = better recall, slower search. 100-200 recommended."""
+    bm25_weight: float = 0.3
+    """Weight for BM25 score in hybrid ranking (0.0 to 1.0).
+    0.0 = pure vector, 1.0 = pure BM25. 0.3 recommended."""
+
+    # Query Cache Configuration
+    query_cache_enabled: bool = True
+    """Enable query result caching."""
+    query_cache_ttl_seconds: int = 3600
+    """Cache TTL in seconds. Default: 1 hour."""
+    semantic_cache_threshold: float = 0.95
+    """Cosine similarity threshold for semantic cache matching.
+    If a cached query embedding is >= this similar, return cached result."""
+
+    # Smart Chunking Configuration
+    min_chunk_size: int = 100
+    """Minimum characters per chunk. Smaller blocks get merged."""
+    max_chunk_size: int = 1000
+    """Maximum characters per chunk. Larger blocks get split."""
+    skip_headers_footers: bool = True
+    """Skip header/footer blocks during chunking."""
+    deduplicate_chunks: bool = True
+    """Skip chunks with duplicate content hash."""
+
     # Upload
     max_file_size: int = 50 * 1024 * 1024  # 50MB
     upload_dir: str = "./uploads"
