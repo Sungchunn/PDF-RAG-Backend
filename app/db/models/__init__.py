@@ -33,6 +33,7 @@ from app.db.models.processing import (
     ProcessingJobItemModel,
     IdempotencyKeyModel,
 )
+from app.db.models.cache import QueryCacheModel
 
 __all__ = [
     # User
@@ -60,4 +61,6 @@ __all__ = [
     "ProcessingJobStageModel",
     "ProcessingJobItemModel",
     "IdempotencyKeyModel",
+    # Cache
+    "QueryCacheModel",
 ]
