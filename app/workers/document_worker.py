@@ -1,13 +1,25 @@
 """
 Background worker for document processing.
+
+Optimizations:
+- Smart chunking with deduplication
+- Matryoshka embeddings (512 dimensions)
+- Cache invalidation on document updates
 """
 
 import logging
+from datetime import datetime, timezone
+from typing import List
+from uuid import uuid4
 
-from app.core.pdf_parser import get_pdf_parser
-from app.core.rag_engine import RAGEngine
+from app.config import get_settings
+from app.core.pdf_parser import get_pdf_parser, TextBlock
+from app.core.chunking import SmartChunker, ChunkData, create_smart_chunker
+from app.core.embeddings import EmbeddingService
+from app.core.query_cache import QueryCache
+from app.core.vector_store import PGVectorStore
 from app.db.database import async_session_maker
-from app.db.models import DocumentModel
+from app.db.models import DocumentModel, DocumentChunkModel
 from app.services.processing_service import (
     ProcessingService,
     JobStatus,
@@ -59,8 +71,18 @@ async def _process_document(
     file_path: str,
     user_id: str,
 ) -> bool:
-    """Internal processing logic with provided session."""
+    """
+    Internal processing logic with provided session.
+
+    Optimized pipeline:
+    1. Parse PDF → extract text blocks with coordinates
+    2. Smart chunking → classify, filter, merge, deduplicate
+    3. Generate 512d Matryoshka embeddings
+    4. Store in pgvector with FTS support
+    5. Invalidate related query cache entries
+    """
     processing = ProcessingService(session)
+    settings = get_settings()
 
     try:
         # Start job
@@ -86,23 +108,92 @@ async def _process_document(
         await processing.update_job_status(
             job_id,
             JobStatus.RUNNING,
-            progress_percent=33,
+            progress_percent=20,
         )
         logger.info(
             f"Parsed document {document_id}: {len(parsed.blocks)} blocks, "
             f"{parsed.total_lines} lines"
         )
 
-        # Stage 2: Index in RAG engine
+        # Stage 2: Smart chunking
+        chunk_stage = await processing.create_stage(job_id, "chunking")
+        await processing.update_stage_status(chunk_stage.id, StageStatus.RUNNING)
+
+        chunker = create_smart_chunker()
+        chunks = chunker.chunk_document(parsed.blocks, page_height=792)  # Letter size
+
+        reduction_pct = (
+            (1 - len(chunks) / len(parsed.blocks)) * 100
+            if parsed.blocks
+            else 0
+        )
+
+        await processing.update_stage_status(
+            chunk_stage.id,
+            StageStatus.COMPLETED,
+            percent_complete=100,
+        )
+        await processing.update_job_status(
+            job_id,
+            JobStatus.RUNNING,
+            progress_percent=40,
+        )
+        logger.info(
+            f"Smart chunking complete: {len(parsed.blocks)} blocks → {len(chunks)} chunks "
+            f"({reduction_pct:.1f}% reduction)"
+        )
+
+        # Stage 3: Generate embeddings
+        embed_stage = await processing.create_stage(job_id, "embedding")
+        await processing.update_stage_status(embed_stage.id, StageStatus.RUNNING)
+
+        embedding_service = EmbeddingService(dimensions=settings.embedding_dimensions)
+        texts = [c.text for c in chunks]
+        embeddings = await embedding_service.get_embeddings_batch(texts)
+
+        await processing.update_stage_status(
+            embed_stage.id,
+            StageStatus.COMPLETED,
+            percent_complete=100,
+        )
+        await processing.update_job_status(
+            job_id,
+            JobStatus.RUNNING,
+            progress_percent=70,
+        )
+        logger.info(f"Generated {len(embeddings)} embeddings ({settings.embedding_dimensions}d)")
+
+        # Stage 4: Store in database
         index_stage = await processing.create_stage(job_id, "indexing")
         await processing.update_stage_status(index_stage.id, StageStatus.RUNNING)
 
-        rag_engine = RAGEngine(session, user_id)
-        success = await rag_engine.index_document(document_id, parsed.blocks)
+        now = datetime.now(timezone.utc)
+        for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
+            chunk_model = DocumentChunkModel(
+                id=str(uuid4()),
+                document_id=document_id,
+                page_number=chunk.page_number,
+                chunk_index=i,
+                content=chunk.text,
+                token_count=len(chunk.text.split()),
+                x0=chunk.x0,
+                y0=chunk.y0,
+                x1=chunk.x1,
+                y1=chunk.y1,
+                line_start=chunk.line_start,
+                line_end=chunk.line_end,
+                # Store in 512d column for cost optimization
+                embedding_512=embedding if settings.embedding_dimensions == 512 else None,
+                # Also store in 1536d column for backward compatibility
+                embedding=embedding if settings.embedding_dimensions == 1536 else None,
+                chunk_type=chunk.metadata.chunk_type,
+                is_merged=chunk.metadata.chunk_type == "merged",
+                content_hash=chunk.metadata.content_hash,
+                created_at=now,
+            )
+            session.add(chunk_model)
 
-        if not success:
-            await processing.update_stage_status(index_stage.id, StageStatus.FAILED)
-            raise Exception("Failed to index document")
+        await session.flush()
 
         await processing.update_stage_status(
             index_stage.id,
@@ -112,19 +203,26 @@ async def _process_document(
         await processing.update_job_status(
             job_id,
             JobStatus.RUNNING,
-            progress_percent=66,
+            progress_percent=85,
         )
-        logger.info(f"Indexed document {document_id}")
+        logger.info(f"Indexed {len(chunks)} chunks for document {document_id}")
 
-        # Stage 3: Update document status
+        # Stage 5: Finalize and cache invalidation
         finalize_stage = await processing.create_stage(job_id, "finalizing")
         await processing.update_stage_status(finalize_stage.id, StageStatus.RUNNING)
 
+        # Update document status
         doc = await session.get(DocumentModel, document_id)
         if doc:
             doc.status = "ready"
             doc.page_count = parsed.page_count
             await session.flush()
+
+        # Invalidate any cached queries for this document
+        cache = QueryCache(session)
+        invalidated = await cache.invalidate_for_document(document_id)
+        if invalidated > 0:
+            logger.info(f"Invalidated {invalidated} cached queries for document {document_id}")
 
         await processing.update_stage_status(
             finalize_stage.id,

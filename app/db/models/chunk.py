@@ -7,8 +7,9 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Optional
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, Integer, Numeric, String, Text
+from sqlalchemy import Boolean, Computed, DateTime, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.dialects.postgresql import TSVECTOR
 from pgvector.sqlalchemy import Vector
 
 from app.db.database import Base
@@ -45,6 +46,13 @@ class DocumentChunkModel(Base):
         Text,
         nullable=False,
     )
+    # Full-text search vector (auto-generated from content)
+    content_tsv: Mapped[Optional[str]] = mapped_column(
+        TSVECTOR,
+        Computed("to_tsvector('english', content)", persisted=True),
+        nullable=True,
+    )
+    """PostgreSQL tsvector for BM25 full-text search"""
     token_count: Mapped[Optional[int]] = mapped_column(
         Integer,
         nullable=True,
