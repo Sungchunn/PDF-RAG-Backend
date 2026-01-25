@@ -1,11 +1,17 @@
 """
 RAG engine using LlamaIndex for document indexing and pgvector for storage.
+
+Optimizations:
+- Hybrid search (BM25 + vector reranking) for reduced cost
+- Query result caching with semantic deduplication
+- Matryoshka embeddings (512 dimensions) for reduced storage
 """
 
 from dataclasses import dataclass
 from typing import List, Optional
 import logging
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 try:
@@ -25,16 +31,17 @@ except ImportError:
     OPENAI_AVAILABLE = False
 
 try:
-    from llama_index.embeddings.gemini import GeminiEmbedding
     from llama_index.llms.gemini import Gemini
 
     GEMINI_AVAILABLE = True
 except ImportError:
     GEMINI_AVAILABLE = False
 
-from app.config import settings
+from app.config import settings, get_settings
 from app.core.pdf_parser import TextBlock
-from app.core.vector_store import PGVectorStore, ChunkData
+from app.core.vector_store import PGVectorStore, ChunkData, RetrievedChunk
+from app.core.embeddings import EmbeddingService
+from app.core.query_cache import QueryCache
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +104,15 @@ class RAGEngine:
         self.session = session
         self.user_id = user_id
         self.vector_store = PGVectorStore(session, user_id)
+
+        # Initialize optimized embedding service
+        app_settings = get_settings()
+        self.embedding_service = EmbeddingService(
+            dimensions=app_settings.embedding_dimensions
+        )
+
+        # Initialize query cache
+        self.query_cache = QueryCache(session)
 
         # Configure LlamaIndex settings
         Settings.chunk_size = settings.chunk_size
@@ -179,10 +195,9 @@ class RAGEngine:
         raise ValueError("Unsupported LLM provider. Use 'openai' or 'gemini'.")
 
     async def _get_embedding(self, text: str) -> List[float]:
-        """Generate embedding for text."""
-        embed_model = self._get_embed_model()
-        embedding = embed_model.get_text_embedding(text)
-        return embedding
+        """Generate embedding for text using optimized embedding service."""
+        # Use the new Matryoshka-aware embedding service
+        return await self.embedding_service.get_embedding(text)
 
     async def index_document(
         self,
@@ -238,30 +253,71 @@ class RAGEngine:
         document_id: Optional[str] = None,
         llm_provider: Optional[str] = None,
         llm_model: Optional[str] = None,
+        use_cache: bool = True,
     ) -> RAGResponse:
         """
         Query the RAG pipeline with a question.
+
+        Optimized pipeline:
+        1. Check query cache (exact hash + semantic similarity)
+        2. If miss: Run hybrid search (BM25 + vector rerank)
+        3. Cache results
+        4. Generate LLM response with retrieved context
 
         Args:
             question: User's question
             document_id: Optional specific document to query
             llm_provider: Optional LLM provider override
             llm_model: Optional LLM model override
+            use_cache: Whether to use query caching (default True)
 
         Returns:
             RAGResponse with answer and citations
         """
+        app_settings = get_settings()
+        document_ids = [document_id] if document_id else None
+
         try:
-            # Generate embedding for question
+            # Step 1: Check cache (exact match first)
+            if use_cache and app_settings.query_cache_enabled:
+                cached = await self.query_cache.get(question, self.user_id, document_ids)
+                if cached:
+                    logger.info(f"Cache hit (exact) for query, hit_count={cached.hit_count}")
+                    chunks = await self._fetch_chunks_by_ids(cached.chunk_ids)
+                    return await self._generate_response(
+                        question, chunks, llm_provider, llm_model
+                    )
+
+            # Step 2: Generate query embedding
             query_embedding = await self._get_embedding(question)
 
-            # Retrieve relevant chunks from pgvector
-            document_ids = [document_id] if document_id else None
-            retrieved = await self.vector_store.query(
-                query_embedding,
-                document_ids=document_ids,
-                top_k=settings.similarity_top_k,
-            )
+            # Step 2b: Check semantic cache (if enabled)
+            if use_cache and app_settings.query_cache_enabled:
+                cached = await self.query_cache.get_semantic(
+                    query_embedding, self.user_id, document_ids
+                )
+                if cached:
+                    logger.info(f"Cache hit (semantic) for query, hit_count={cached.hit_count}")
+                    chunks = await self._fetch_chunks_by_ids(cached.chunk_ids)
+                    return await self._generate_response(
+                        question, chunks, llm_provider, llm_model
+                    )
+
+            # Step 3: Hybrid search or pure vector search
+            if app_settings.use_hybrid_search:
+                retrieved = await self.vector_store.hybrid_query(
+                    query_text=question,
+                    query_embedding=query_embedding,
+                    document_ids=document_ids,
+                    top_k=settings.similarity_top_k,
+                )
+            else:
+                # Fall back to pure vector search
+                retrieved = await self.vector_store.query(
+                    query_embedding,
+                    document_ids=document_ids,
+                    top_k=settings.similarity_top_k,
+                )
 
             if not retrieved:
                 return RAGResponse(
@@ -270,49 +326,21 @@ class RAGEngine:
                     source_document_ids=[],
                 )
 
-            # Convert to RetrievedContext
-            contexts = [
-                RetrievedContext(
-                    text=chunk.text,
-                    document_id=chunk.document_id,
-                    page_number=chunk.page_number,
-                    bbox_x0=chunk.x0,
-                    bbox_y0=chunk.y0,
-                    bbox_x1=chunk.x1,
-                    bbox_y1=chunk.y1,
-                    score=chunk.score,
-                    line_start=chunk.line_start,
-                    line_end=chunk.line_end,
+            # Step 4: Cache results
+            if use_cache and app_settings.query_cache_enabled and retrieved:
+                await self.query_cache.set(
+                    query=question,
+                    query_embedding=query_embedding,
+                    user_id=self.user_id,
+                    document_ids=document_ids,
+                    chunk_ids=[c.id for c in retrieved],
+                    scores=[c.score for c in retrieved],
                 )
-                for chunk in retrieved
-            ]
+                logger.debug(f"Cached query result with {len(retrieved)} chunks")
 
-            # Build context for LLM
-            context_text = "\n\n".join(
-                f"[Source: Page {ctx.page_number}, Lines {ctx.line_start}-{ctx.line_end}]\n{ctx.text}"
-                for ctx in contexts
-            )
-
-            # Generate answer using LLM
-            llm = self._get_llm(provider=llm_provider, model=llm_model)
-            prompt = f"""Based on the following context from documents, answer the question.
-
-Context:
-{context_text}
-
-Question: {question}
-
-Answer:"""
-
-            response = llm.complete(prompt)
-            answer = str(response)
-
-            source_doc_ids = list(set(ctx.document_id for ctx in contexts))
-
-            return RAGResponse(
-                answer=answer,
-                contexts=contexts,
-                source_document_ids=source_doc_ids,
+            # Step 5: Generate response
+            return await self._generate_response(
+                question, retrieved, llm_provider, llm_model
             )
 
         except Exception as e:
@@ -322,6 +350,94 @@ Answer:"""
                 contexts=[],
                 source_document_ids=[],
             )
+
+    async def _fetch_chunks_by_ids(self, chunk_ids: List[str]) -> List[RetrievedChunk]:
+        """Fetch chunks by ID list (for cache hits)."""
+        if not chunk_ids:
+            return []
+
+        result = await self.session.execute(
+            text("""
+                SELECT id, document_id, content, page_number,
+                       x0, y0, x1, y1, line_start, line_end
+                FROM document_chunks
+                WHERE id = ANY(:ids)
+            """),
+            {"ids": chunk_ids},
+        )
+
+        # Build map and preserve original order from cache
+        chunk_map = {row.id: row for row in result}
+        return [
+            RetrievedChunk(
+                id=chunk_map[cid].id,
+                text=chunk_map[cid].content,
+                document_id=chunk_map[cid].document_id,
+                page_number=chunk_map[cid].page_number,
+                x0=float(chunk_map[cid].x0) if chunk_map[cid].x0 else 0.0,
+                y0=float(chunk_map[cid].y0) if chunk_map[cid].y0 else 0.0,
+                x1=float(chunk_map[cid].x1) if chunk_map[cid].x1 else 0.0,
+                y1=float(chunk_map[cid].y1) if chunk_map[cid].y1 else 0.0,
+                line_start=chunk_map[cid].line_start,
+                line_end=chunk_map[cid].line_end,
+                score=1.0,  # Score not stored in cache
+            )
+            for cid in chunk_ids
+            if cid in chunk_map
+        ]
+
+    async def _generate_response(
+        self,
+        question: str,
+        retrieved: List[RetrievedChunk],
+        llm_provider: Optional[str] = None,
+        llm_model: Optional[str] = None,
+    ) -> RAGResponse:
+        """Generate LLM response from retrieved chunks."""
+        # Convert to RetrievedContext
+        contexts = [
+            RetrievedContext(
+                text=chunk.text,
+                document_id=chunk.document_id,
+                page_number=chunk.page_number,
+                bbox_x0=chunk.x0,
+                bbox_y0=chunk.y0,
+                bbox_x1=chunk.x1,
+                bbox_y1=chunk.y1,
+                score=chunk.score,
+                line_start=chunk.line_start,
+                line_end=chunk.line_end,
+            )
+            for chunk in retrieved
+        ]
+
+        # Build context for LLM
+        context_text = "\n\n".join(
+            f"[Source: Page {ctx.page_number}, Lines {ctx.line_start}-{ctx.line_end}]\n{ctx.text}"
+            for ctx in contexts
+        )
+
+        # Generate answer using LLM
+        llm = self._get_llm(provider=llm_provider, model=llm_model)
+        prompt = f"""Based on the following context from documents, answer the question.
+
+Context:
+{context_text}
+
+Question: {question}
+
+Answer:"""
+
+        response = llm.complete(prompt)
+        answer = str(response)
+
+        source_doc_ids = list(set(ctx.document_id for ctx in contexts))
+
+        return RAGResponse(
+            answer=answer,
+            contexts=contexts,
+            source_document_ids=source_doc_ids,
+        )
 
     async def remove_document(self, document_id: str) -> bool:
         """Remove a document's chunks from the vector store."""
