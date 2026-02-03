@@ -9,7 +9,7 @@ from unittest.mock import patch, MagicMock
 from app.core.pdf_parser import TextBlock
 from app.core.chunking import (
     SmartChunker,
-    ChunkData,
+    ProcessedChunk,
     ChunkMetadata,
     create_smart_chunker,
 )
@@ -428,3 +428,152 @@ class TestChunkMetadata:
         assert metadata.content_hash == "abc123"
         assert metadata.is_duplicate is True
         assert metadata.merged_from == ["chunk1", "chunk2"]
+
+
+class TestProcessedChunk:
+    """Tests for ProcessedChunk dataclass.
+
+    ProcessedChunk is the output type from SmartChunker, distinct from
+    ChunkData in vector_store.py which is used for storage operations.
+    """
+
+    def test_basic_creation(self):
+        """Test creating a ProcessedChunk with required fields."""
+        metadata = ChunkMetadata(chunk_type="text", content_hash="abc123")
+        chunk = ProcessedChunk(
+            text="Sample text content",
+            page_number=1,
+            x0=72.0,
+            y0=100.0,
+            x1=540.0,
+            y1=200.0,
+            line_start=1,
+            line_end=10,
+            chunk_index=0,
+            metadata=metadata,
+        )
+
+        assert chunk.text == "Sample text content"
+        assert chunk.page_number == 1
+        assert chunk.x0 == 72.0
+        assert chunk.y0 == 100.0
+        assert chunk.x1 == 540.0
+        assert chunk.y1 == 200.0
+        assert chunk.line_start == 1
+        assert chunk.line_end == 10
+        assert chunk.chunk_index == 0
+        assert chunk.metadata == metadata
+        assert chunk.embedding is None  # Default
+
+    def test_with_embedding(self):
+        """Test creating a ProcessedChunk with embedding."""
+        metadata = ChunkMetadata(chunk_type="text")
+        embedding = [0.1, 0.2, 0.3, 0.4, 0.5]
+        chunk = ProcessedChunk(
+            text="Text with embedding",
+            page_number=1,
+            x0=0.0,
+            y0=0.0,
+            x1=100.0,
+            y1=100.0,
+            line_start=1,
+            line_end=5,
+            chunk_index=0,
+            metadata=metadata,
+            embedding=embedding,
+        )
+
+        assert chunk.embedding == embedding
+
+    def test_chunker_returns_processed_chunks(self):
+        """Test that SmartChunker.chunk_document returns ProcessedChunk instances."""
+        chunker = SmartChunker(
+            min_chunk_size=10,
+            max_chunk_size=1000,
+            skip_headers_footers=False,
+            deduplicate=False,
+        )
+        blocks = [
+            TextBlock(
+                text="Test content block",
+                page_number=1,
+                x0=72,
+                y0=200,
+                x1=540,
+                y1=300,
+                line_start=1,
+                line_end=5,
+            ),
+        ]
+
+        result = chunker.chunk_document(blocks, page_height=792)
+
+        assert len(result) == 1
+        assert isinstance(result[0], ProcessedChunk)
+        assert hasattr(result[0], "metadata")
+        assert isinstance(result[0].metadata, ChunkMetadata)
+
+    def test_processed_chunk_has_metadata_not_document_id(self):
+        """Test that ProcessedChunk has metadata field, not document_id.
+
+        This verifies the distinction from vector_store.ChunkData which
+        has document_id but no metadata field.
+        """
+        metadata = ChunkMetadata(chunk_type="text")
+        chunk = ProcessedChunk(
+            text="Test",
+            page_number=1,
+            x0=0.0,
+            y0=0.0,
+            x1=100.0,
+            y1=100.0,
+            line_start=1,
+            line_end=1,
+            chunk_index=0,
+            metadata=metadata,
+        )
+
+        # ProcessedChunk should have metadata
+        assert hasattr(chunk, "metadata")
+        assert chunk.metadata.chunk_type == "text"
+
+        # ProcessedChunk should NOT have document_id (that's vector_store.ChunkData)
+        assert not hasattr(chunk, "document_id")
+
+    def test_merged_chunk_metadata(self):
+        """Test that merged chunks have proper metadata."""
+        chunker = SmartChunker(
+            min_chunk_size=100,
+            max_chunk_size=1000,
+            skip_headers_footers=False,
+            deduplicate=False,
+        )
+        # Two small blocks that will be merged
+        blocks = [
+            TextBlock(
+                text="First small block",
+                page_number=1,
+                x0=72,
+                y0=100,
+                x1=200,
+                y1=120,
+                line_start=1,
+                line_end=2,
+            ),
+            TextBlock(
+                text="Second small block",
+                page_number=1,
+                x0=72,
+                y0=130,
+                x1=200,
+                y1=150,
+                line_start=3,
+                line_end=4,
+            ),
+        ]
+
+        result = chunker.chunk_document(blocks, page_height=792)
+
+        assert len(result) == 1
+        assert isinstance(result[0], ProcessedChunk)
+        assert result[0].metadata.chunk_type == "merged"
