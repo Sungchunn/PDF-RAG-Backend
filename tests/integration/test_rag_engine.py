@@ -205,9 +205,9 @@ class TestRAGEngine:
             mock_result.fetchall.return_value = [mock_row]
             mock_session.execute.return_value = mock_result
 
-            # Mock LLM
+            # Mock LLM with async acomplete
             mock_llm = MagicMock()
-            mock_llm.complete.return_value = "Generated answer"
+            mock_llm.acomplete = AsyncMock(return_value="Generated answer")
 
             with patch.object(engine, "_get_llm", return_value=mock_llm):
                 response = await engine.query("What is AI?")
@@ -272,9 +272,9 @@ class TestRAGEngine:
                             engine.query_cache, "set",
                             new_callable=AsyncMock, return_value="cache-id"
                         ):
-                            # Mock LLM
+                            # Mock LLM with async acomplete
                             mock_llm = MagicMock()
-                            mock_llm.complete.return_value = "Generated answer from search"
+                            mock_llm.acomplete = AsyncMock(return_value="Generated answer from search")
 
                             with patch.object(engine, "_get_llm", return_value=mock_llm):
                                 response = await engine.query("New question?")
@@ -366,7 +366,7 @@ class TestRAGEngine:
                 new_callable=AsyncMock, return_value=[search_result]
             ) as mock_search:
                 mock_llm = MagicMock()
-                mock_llm.complete.return_value = "Answer"
+                mock_llm.acomplete = AsyncMock(return_value="Answer")
 
                 with patch.object(engine, "_get_llm", return_value=mock_llm):
                     await engine.query(
@@ -377,6 +377,58 @@ class TestRAGEngine:
                     # Verify document filter was passed
                     call_kwargs = mock_search.call_args[1]
                     assert call_kwargs["document_ids"] == ["doc-specific"]
+
+    # ============ Async LLM Tests ============
+
+    @pytest.mark.asyncio
+    @patch("app.core.rag_engine.get_settings")
+    @patch("app.core.rag_engine.settings")
+    async def test_generate_response_uses_async_acomplete(
+        self, mock_settings_module, mock_get_settings, mock_session
+    ):
+        """Test that _generate_response uses async acomplete instead of blocking complete."""
+        mock_settings = MagicMock()
+        mock_settings.embedding_dimensions = 512
+        mock_settings.query_cache_enabled = False
+        mock_settings.use_hybrid_search = True
+        mock_get_settings.return_value = mock_settings
+        mock_settings_module.chunk_size = 512
+        mock_settings_module.chunk_overlap = 50
+        mock_settings_module.similarity_top_k = 5
+        mock_settings_module.llm_provider = "openai"
+        mock_settings_module.openai_api_key = "test-key"
+        mock_settings_module.openai_model = "gpt-4"
+
+        engine = RAGEngine(mock_session, user_id="test-user")
+
+        from app.core.vector_store import RetrievedChunk
+        chunks = [
+            RetrievedChunk(
+                id="chunk-1",
+                text="Test content for async verification",
+                document_id="doc-1",
+                page_number=1,
+                x0=0, y0=0, x1=100, y1=100,
+                line_start=1, line_end=5,
+                score=0.9,
+            )
+        ]
+
+        # Create mock LLM with both sync and async methods
+        mock_llm = MagicMock()
+        mock_llm.complete = MagicMock(return_value="Sync response - should not be used")
+        mock_llm.acomplete = AsyncMock(return_value="Async response")
+
+        with patch.object(engine, "_get_llm", return_value=mock_llm):
+            response = await engine._generate_response(
+                "What is the content about?",
+                chunks,
+            )
+
+            # Verify async acomplete was called, not sync complete
+            mock_llm.acomplete.assert_called_once()
+            mock_llm.complete.assert_not_called()
+            assert response.answer == "Async response"
 
     # ============ Document Removal Tests ============
 
