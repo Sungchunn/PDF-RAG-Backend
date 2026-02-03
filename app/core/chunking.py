@@ -30,8 +30,8 @@ class ChunkMetadata:
 
 
 @dataclass
-class ChunkData:
-    """Processed chunk ready for embedding and storage."""
+class ProcessedChunk:
+    """Chunk output from SmartChunker with processing metadata."""
 
     text: str
     page_number: int
@@ -92,7 +92,7 @@ class SmartChunker:
         self,
         blocks: List[TextBlock],
         page_height: float = 792,  # Default letter size in points
-    ) -> List[ChunkData]:
+    ) -> List[ProcessedChunk]:
         """
         Process document blocks into optimized chunks.
 
@@ -161,7 +161,7 @@ class SmartChunker:
         self,
         blocks: List[TextBlock],
         page_height: float,
-    ) -> List[ChunkData]:
+    ) -> List[ProcessedChunk]:
         """Classify each block by type based on position and content."""
         chunks = []
 
@@ -170,7 +170,7 @@ class SmartChunker:
             content_hash = EmbeddingService.compute_text_hash(block.text)
 
             chunks.append(
-                ChunkData(
+                ProcessedChunk(
                     text=block.text,
                     page_number=block.page_number,
                     x0=block.x0,
@@ -236,8 +236,8 @@ class SmartChunker:
 
     def _merge_small_blocks(
         self,
-        chunks: List[ChunkData],
-    ) -> List[ChunkData]:
+        chunks: List[ProcessedChunk],
+    ) -> List[ProcessedChunk]:
         """
         Merge adjacent small blocks on the same page.
 
@@ -283,13 +283,13 @@ class SmartChunker:
 
     def _merge_two_chunks(
         self,
-        a: ChunkData,
-        b: ChunkData,
-    ) -> ChunkData:
+        a: ProcessedChunk,
+        b: ProcessedChunk,
+    ) -> ProcessedChunk:
         """Merge two adjacent chunks into one."""
         combined_text = f"{a.text}\n\n{b.text}"
 
-        return ChunkData(
+        return ProcessedChunk(
             text=combined_text,
             page_number=a.page_number,
             # Expand bounding box to cover both chunks
@@ -309,8 +309,8 @@ class SmartChunker:
 
     def _deduplicate(
         self,
-        chunks: List[ChunkData],
-    ) -> List[ChunkData]:
+        chunks: List[ProcessedChunk],
+    ) -> List[ProcessedChunk]:
         """Remove chunks with duplicate content hash."""
         result = []
 

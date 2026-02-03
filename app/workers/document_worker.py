@@ -14,7 +14,7 @@ from uuid import uuid4
 
 from app.config import get_settings
 from app.core.pdf_parser import get_pdf_parser, TextBlock
-from app.core.chunking import SmartChunker, ChunkData, create_smart_chunker
+from app.core.chunking import SmartChunker, ProcessedChunk, create_smart_chunker
 from app.core.embeddings import EmbeddingService
 from app.core.query_cache import QueryCache
 from app.core.vector_store import PGVectorStore
