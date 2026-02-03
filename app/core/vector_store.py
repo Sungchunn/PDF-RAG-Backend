@@ -82,64 +82,83 @@ class PGVectorStore:
         """
         Store chunks with embeddings in pgvector.
 
+        Uses a savepoint to ensure atomicity - either all chunks are stored
+        or none are, preventing partial data on failures.
+
         Args:
             chunks: List of chunk data with embeddings
 
         Returns:
             List of created chunk IDs
-        """
-        chunk_ids = []
 
+        Raises:
+            Exception: Re-raises any database error after rolling back partial changes
+        """
+        if not chunks:
+            return []
+
+        chunk_ids = []
+        now = datetime.now(timezone.utc)
+
+        # Prepare chunk data with IDs upfront
+        chunk_data = []
         for chunk in chunks:
             chunk_id = str(uuid4())
-            now = datetime.now(timezone.utc)
-
-            # Create chunk record
-            chunk_model = DocumentChunkModel(
-                id=chunk_id,
-                document_id=chunk.document_id,
-                page_number=chunk.page_number,
-                chunk_index=chunk.chunk_index,
-                content=chunk.text,
-                token_count=chunk.token_count,
-                x0=chunk.x0,
-                y0=chunk.y0,
-                x1=chunk.x1,
-                y1=chunk.y1,
-                line_start=chunk.line_start,
-                line_end=chunk.line_end,
-                created_at=now,
-            )
-            self.session.add(chunk_model)
-
-            # Store embedding using raw SQL (pgvector requires special handling)
-            if chunk.embedding:
-                # Update embedding via raw SQL
-                embedding_str = "[" + ",".join(str(x) for x in chunk.embedding) + "]"
-                await self.session.execute(
-                    text(
-                        """
-                        UPDATE document_chunks
-                        SET embedding = :embedding::vector
-                        WHERE id = :chunk_id
-                        """
-                    ),
-                    {"embedding": embedding_str, "chunk_id": chunk_id},
-                )
-
-                # Create vector reference record
-                vector_model = ChunkVectorModel(
-                    id=str(uuid4()),
-                    chunk_id=chunk_id,
-                    vector_store="pgvector",
-                    vector_id=chunk_id,
-                    indexed_at=now,
-                )
-                self.session.add(vector_model)
-
             chunk_ids.append(chunk_id)
+            chunk_data.append((chunk_id, chunk))
 
-        await self.session.flush()
+        # Use a savepoint for atomicity - if any operation fails,
+        # all changes roll back to prevent session leaks
+        async with self.session.begin_nested():
+            # Stage 1: Create all chunk records
+            for chunk_id, chunk in chunk_data:
+                chunk_model = DocumentChunkModel(
+                    id=chunk_id,
+                    document_id=chunk.document_id,
+                    page_number=chunk.page_number,
+                    chunk_index=chunk.chunk_index,
+                    content=chunk.text,
+                    token_count=chunk.token_count,
+                    x0=chunk.x0,
+                    y0=chunk.y0,
+                    x1=chunk.x1,
+                    y1=chunk.y1,
+                    line_start=chunk.line_start,
+                    line_end=chunk.line_end,
+                    created_at=now,
+                )
+                self.session.add(chunk_model)
+
+            # Flush to ensure all chunks exist before UPDATE statements
+            await self.session.flush()
+
+            # Stage 2: Update embeddings and create vector references
+            for chunk_id, chunk in chunk_data:
+                if chunk.embedding:
+                    embedding_str = "[" + ",".join(str(x) for x in chunk.embedding) + "]"
+                    await self.session.execute(
+                        text(
+                            """
+                            UPDATE document_chunks
+                            SET embedding = :embedding::vector
+                            WHERE id = :chunk_id
+                            """
+                        ),
+                        {"embedding": embedding_str, "chunk_id": chunk_id},
+                    )
+
+                    vector_model = ChunkVectorModel(
+                        id=str(uuid4()),
+                        chunk_id=chunk_id,
+                        vector_store="pgvector",
+                        vector_id=chunk_id,
+                        indexed_at=now,
+                    )
+                    self.session.add(vector_model)
+
+            # Final flush for vector models
+            await self.session.flush()
+
         return chunk_ids
 
     async def query(
