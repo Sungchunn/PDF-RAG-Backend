@@ -13,6 +13,7 @@ from app.core.rag_engine import (
     create_rag_engine,
 )
 from app.core.pdf_parser import TextBlock
+from app.core.exceptions import RAGQueryError, RAGIndexError, RAGError
 
 
 class TestRAGEngine:
@@ -84,7 +85,7 @@ class TestRAGEngine:
     async def test_index_document_success(
         self, mock_settings_module, mock_get_settings, mock_session, sample_blocks
     ):
-        """Test successful document indexing."""
+        """Test successful document indexing returns chunk count."""
         mock_settings = MagicMock()
         mock_settings.embedding_dimensions = 512
         mock_settings.use_matryoshka = True
@@ -108,7 +109,8 @@ class TestRAGEngine:
             ):
                 result = await engine.index_document("doc-1", sample_blocks)
 
-                assert result is True
+                # Returns chunk count (2 blocks indexed)
+                assert result == 2
 
     @pytest.mark.asyncio
     @patch("app.core.rag_engine.get_settings")
@@ -116,7 +118,7 @@ class TestRAGEngine:
     async def test_index_document_empty_blocks(
         self, mock_settings_module, mock_get_settings, mock_session
     ):
-        """Test indexing with empty blocks list."""
+        """Test indexing with empty blocks list returns zero."""
         mock_settings = MagicMock()
         mock_settings.embedding_dimensions = 512
         mock_get_settings.return_value = mock_settings
@@ -131,15 +133,15 @@ class TestRAGEngine:
         ):
             result = await engine.index_document("doc-1", [])
 
-            assert result is True
+            assert result == 0
 
     @pytest.mark.asyncio
     @patch("app.core.rag_engine.get_settings")
     @patch("app.core.rag_engine.settings")
-    async def test_index_document_failure(
+    async def test_index_document_failure_raises_rag_index_error(
         self, mock_settings_module, mock_get_settings, mock_session, sample_blocks
     ):
-        """Test document indexing failure handling."""
+        """Test document indexing failure raises RAGIndexError."""
         mock_settings = MagicMock()
         mock_settings.embedding_dimensions = 512
         mock_get_settings.return_value = mock_settings
@@ -153,9 +155,12 @@ class TestRAGEngine:
             engine.embedding_service, "get_embedding",
             new_callable=AsyncMock, side_effect=Exception("API error")
         ):
-            result = await engine.index_document("doc-1", sample_blocks)
+            with pytest.raises(RAGIndexError) as exc_info:
+                await engine.index_document("doc-1", sample_blocks)
 
-            assert result is False
+            # Verify user message is safe (no internal details)
+            assert "API error" not in exc_info.value.user_message
+            assert "Unable to index document" in exc_info.value.user_message
 
     # ============ Query Pipeline Tests ============
 
@@ -430,6 +435,72 @@ class TestRAGEngine:
             mock_llm.complete.assert_not_called()
             assert response.answer == "Async response"
 
+    # ============ Query Error Handling Tests ============
+
+    @pytest.mark.asyncio
+    @patch("app.core.rag_engine.get_settings")
+    @patch("app.core.rag_engine.settings")
+    async def test_query_failure_raises_rag_query_error(
+        self, mock_settings_module, mock_get_settings, mock_session
+    ):
+        """Test query failure raises RAGQueryError with safe user message."""
+        mock_settings = MagicMock()
+        mock_settings.embedding_dimensions = 512
+        mock_settings.query_cache_enabled = True
+        mock_settings.use_hybrid_search = True
+        mock_get_settings.return_value = mock_settings
+        mock_settings_module.chunk_size = 512
+        mock_settings_module.chunk_overlap = 50
+        mock_settings_module.similarity_top_k = 5
+
+        engine = RAGEngine(mock_session, user_id="test-user")
+
+        # Mock cache miss
+        with patch.object(
+            engine.query_cache, "get",
+            new_callable=AsyncMock, return_value=None
+        ):
+            # Mock embedding failure
+            with patch.object(
+                engine.embedding_service, "get_embedding",
+                new_callable=AsyncMock, side_effect=Exception("API key invalid: sk-abc123")
+            ):
+                with pytest.raises(RAGQueryError) as exc_info:
+                    await engine.query("What is AI?")
+
+                # Verify internal details are not in user message
+                assert "sk-abc123" not in exc_info.value.user_message
+                assert "API key" not in exc_info.value.user_message
+                assert "Unable to process your query" in exc_info.value.user_message
+
+    @pytest.mark.asyncio
+    @patch("app.core.rag_engine.get_settings")
+    @patch("app.core.rag_engine.settings")
+    async def test_query_preserves_exception_chain(
+        self, mock_settings_module, mock_get_settings, mock_session
+    ):
+        """Test query error preserves original exception as cause."""
+        mock_settings = MagicMock()
+        mock_settings.embedding_dimensions = 512
+        mock_settings.query_cache_enabled = False
+        mock_get_settings.return_value = mock_settings
+        mock_settings_module.chunk_size = 512
+        mock_settings_module.chunk_overlap = 50
+
+        engine = RAGEngine(mock_session, user_id="test-user")
+
+        original_error = ValueError("Original underlying error")
+
+        with patch.object(
+            engine.embedding_service, "get_embedding",
+            new_callable=AsyncMock, side_effect=original_error
+        ):
+            with pytest.raises(RAGQueryError) as exc_info:
+                await engine.query("Question?")
+
+            # Verify exception chaining
+            assert exc_info.value.__cause__ is original_error
+
     # ============ Document Removal Tests ============
 
     @pytest.mark.asyncio
@@ -438,7 +509,7 @@ class TestRAGEngine:
     async def test_remove_document_success(
         self, mock_settings_module, mock_get_settings, mock_session
     ):
-        """Test successful document removal."""
+        """Test successful document removal returns deleted count."""
         mock_settings = MagicMock()
         mock_settings.embedding_dimensions = 512
         mock_get_settings.return_value = mock_settings
@@ -453,7 +524,7 @@ class TestRAGEngine:
         ):
             result = await engine.remove_document("doc-1")
 
-            assert result is True
+            assert result == 5
 
     @pytest.mark.asyncio
     @patch("app.core.rag_engine.get_settings")
@@ -461,7 +532,7 @@ class TestRAGEngine:
     async def test_remove_document_not_found(
         self, mock_settings_module, mock_get_settings, mock_session
     ):
-        """Test removing non-existent document."""
+        """Test removing non-existent document returns zero."""
         mock_settings = MagicMock()
         mock_settings.embedding_dimensions = 512
         mock_get_settings.return_value = mock_settings
@@ -476,7 +547,33 @@ class TestRAGEngine:
         ):
             result = await engine.remove_document("non-existent")
 
-            assert result is False
+            assert result == 0
+
+    @pytest.mark.asyncio
+    @patch("app.core.rag_engine.get_settings")
+    @patch("app.core.rag_engine.settings")
+    async def test_remove_document_failure_raises_rag_error(
+        self, mock_settings_module, mock_get_settings, mock_session
+    ):
+        """Test document removal failure raises RAGError."""
+        mock_settings = MagicMock()
+        mock_settings.embedding_dimensions = 512
+        mock_get_settings.return_value = mock_settings
+        mock_settings_module.chunk_size = 512
+        mock_settings_module.chunk_overlap = 50
+
+        engine = RAGEngine(mock_session, user_id="test-user")
+
+        with patch.object(
+            engine.vector_store, "delete_document_chunks",
+            new_callable=AsyncMock, side_effect=Exception("Database connection failed")
+        ):
+            with pytest.raises(RAGError) as exc_info:
+                await engine.remove_document("doc-1")
+
+            # Verify user message is safe
+            assert "Database connection" not in exc_info.value.user_message
+            assert "Unable to remove document" in exc_info.value.user_message
 
 
 class TestRAGResponse:
