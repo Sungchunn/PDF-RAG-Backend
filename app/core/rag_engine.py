@@ -428,7 +428,7 @@ Question: {question}
 
 Answer:"""
 
-        response = llm.complete(prompt)
+        response = await llm.acomplete(prompt)
         answer = str(response)
 
         source_doc_ids = list(set(ctx.document_id for ctx in contexts))
