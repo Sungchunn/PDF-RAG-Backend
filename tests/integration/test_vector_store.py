@@ -23,6 +23,13 @@ class TestPGVectorStore:
         session.add = MagicMock()
         session.flush = AsyncMock()
         session.execute = AsyncMock()
+
+        # Mock begin_nested as async context manager for savepoint support
+        nested_ctx = AsyncMock()
+        nested_ctx.__aenter__ = AsyncMock(return_value=None)
+        nested_ctx.__aexit__ = AsyncMock(return_value=None)
+        session.begin_nested = MagicMock(return_value=nested_ctx)
+
         return session
 
     @pytest.fixture
@@ -73,7 +80,8 @@ class TestPGVectorStore:
 
         assert len(chunk_ids) == 2
         assert mock_session.add.call_count >= 2  # At least chunk models
-        mock_session.flush.assert_called_once()
+        # Flush is called twice: after chunk models and after vector models
+        assert mock_session.flush.call_count == 2
 
     @pytest.mark.asyncio
     async def test_add_chunks_returns_unique_ids(self, vector_store, mock_session, sample_chunks):
@@ -115,6 +123,139 @@ class TestPGVectorStore:
         chunk_ids = await vector_store.add_chunks([chunk])
 
         assert len(chunk_ids) == 1
+
+    # ============ Savepoint Atomicity Tests ============
+
+    @pytest.fixture
+    def mock_session_with_savepoint(self):
+        """Create a mock session with savepoint (begin_nested) support."""
+        session = AsyncMock()
+        session.add = MagicMock()
+        session.flush = AsyncMock()
+        session.execute = AsyncMock()
+
+        # Mock begin_nested as async context manager
+        nested_ctx = AsyncMock()
+        nested_ctx.__aenter__ = AsyncMock(return_value=None)
+        nested_ctx.__aexit__ = AsyncMock(return_value=None)
+        session.begin_nested = MagicMock(return_value=nested_ctx)
+
+        return session
+
+    @pytest.mark.asyncio
+    async def test_add_chunks_uses_savepoint(self, mock_session_with_savepoint, sample_chunks):
+        """Test that add_chunks uses begin_nested for atomicity."""
+        store = PGVectorStore(mock_session_with_savepoint, user_id="test-user")
+
+        await store.add_chunks(sample_chunks)
+
+        # Verify begin_nested was called for savepoint
+        mock_session_with_savepoint.begin_nested.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_add_chunks_flushes_twice_for_two_stages(
+        self, mock_session_with_savepoint, sample_chunks
+    ):
+        """Test that add_chunks flushes after chunks and after vectors."""
+        store = PGVectorStore(mock_session_with_savepoint, user_id="test-user")
+
+        await store.add_chunks(sample_chunks)
+
+        # Should flush twice: once after chunk models, once after vector models
+        assert mock_session_with_savepoint.flush.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_add_chunks_rollback_on_execute_failure(self, mock_session_with_savepoint):
+        """Test that savepoint rolls back on SQL execution failure."""
+        store = PGVectorStore(mock_session_with_savepoint, user_id="test-user")
+
+        # Make execute fail to simulate embedding update failure
+        mock_session_with_savepoint.execute = AsyncMock(
+            side_effect=Exception("Database error during UPDATE")
+        )
+
+        chunk = ChunkData(
+            text="Test chunk",
+            document_id="doc-1",
+            page_number=1,
+            chunk_index=0,
+            x0=0, y0=0, x1=100, y1=100,
+            line_start=1,
+            line_end=1,
+            embedding=[0.1] * 512,
+        )
+
+        with pytest.raises(Exception, match="Database error during UPDATE"):
+            await store.add_chunks([chunk])
+
+        # begin_nested context manager should handle rollback automatically
+
+    @pytest.mark.asyncio
+    async def test_add_chunks_rollback_on_flush_failure(self, mock_session_with_savepoint):
+        """Test that savepoint rolls back on flush failure."""
+        store = PGVectorStore(mock_session_with_savepoint, user_id="test-user")
+
+        # Make first flush fail
+        mock_session_with_savepoint.flush = AsyncMock(
+            side_effect=Exception("Flush failed - constraint violation")
+        )
+
+        chunk = ChunkData(
+            text="Test chunk",
+            document_id="doc-1",
+            page_number=1,
+            chunk_index=0,
+            x0=0, y0=0, x1=100, y1=100,
+            line_start=1,
+            line_end=1,
+            embedding=[0.1] * 512,
+        )
+
+        with pytest.raises(Exception, match="Flush failed"):
+            await store.add_chunks([chunk])
+
+    @pytest.mark.asyncio
+    async def test_add_chunks_empty_skips_savepoint(self, mock_session_with_savepoint):
+        """Test that empty chunks list skips savepoint creation."""
+        store = PGVectorStore(mock_session_with_savepoint, user_id="test-user")
+
+        result = await store.add_chunks([])
+
+        assert result == []
+        # Should not create savepoint for empty list
+        mock_session_with_savepoint.begin_nested.assert_not_called()
+        mock_session_with_savepoint.add.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_add_chunks_creates_all_models_before_first_flush(
+        self, mock_session_with_savepoint, sample_chunks
+    ):
+        """Test that all chunk models are added before the first flush."""
+        store = PGVectorStore(mock_session_with_savepoint, user_id="test-user")
+
+        add_calls_before_flush = []
+        flush_count = [0]
+
+        original_add = mock_session_with_savepoint.add
+
+        def track_add(model):
+            add_calls_before_flush.append((flush_count[0], model))
+            return original_add(model)
+
+        async def track_flush():
+            flush_count[0] += 1
+
+        mock_session_with_savepoint.add = track_add
+        mock_session_with_savepoint.flush = AsyncMock(side_effect=track_flush)
+
+        await store.add_chunks(sample_chunks)
+
+        # All chunk models (2) should be added before first flush (flush_count=0)
+        chunk_adds_before_first_flush = [
+            call for call in add_calls_before_flush if call[0] == 0
+        ]
+        # Should have 2 chunk models added before any flush
+        assert len(chunk_adds_before_first_flush) == 2
 
     # ============ Vector Query Tests ============
 
