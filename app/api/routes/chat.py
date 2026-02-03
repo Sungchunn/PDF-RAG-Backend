@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from app.api.deps import SessionDep, CurrentUserDep
 from app.config import settings
 from app.core.rag_engine import RAGEngine
+from app.core.exceptions import RAGQueryError
 from app.db.models import DocumentModel
 
 
@@ -146,10 +147,15 @@ async def chat(
             sourceDocuments=response.source_document_ids,
         )
 
-    except Exception as e:
+    except RAGQueryError as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error processing query: {str(e)}",
+            detail=e.user_message,
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred. Please try again.",
         )
 
 

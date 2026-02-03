@@ -42,6 +42,7 @@ from app.core.pdf_parser import TextBlock
 from app.core.vector_store import PGVectorStore, ChunkData, RetrievedChunk
 from app.core.embeddings import EmbeddingService
 from app.core.query_cache import QueryCache
+from app.core.exceptions import RAGError, RAGQueryError, RAGIndexError, LLMError
 
 logger = logging.getLogger(__name__)
 
@@ -203,7 +204,7 @@ class RAGEngine:
         self,
         document_id: str,
         blocks: List[TextBlock],
-    ) -> bool:
+    ) -> int:
         """
         Index a document's text blocks to pgvector.
 
@@ -212,7 +213,10 @@ class RAGEngine:
             blocks: List of parsed text blocks
 
         Returns:
-            True if successful
+            Number of chunks indexed
+
+        Raises:
+            RAGIndexError: If indexing fails
         """
         try:
             chunks: List[ChunkData] = []
@@ -241,11 +245,16 @@ class RAGEngine:
             # Store in pgvector
             await self.vector_store.add_chunks(chunks)
             logger.info(f"Indexed {len(chunks)} chunks for document {document_id}")
-            return True
+            return len(chunks)
 
+        except RAGIndexError:
+            raise
         except Exception as e:
-            logger.error(f"Error indexing document {document_id}: {e}")
-            return False
+            logger.exception(f"Error indexing document {document_id}")
+            raise RAGIndexError(
+                message=f"Failed to index document {document_id}: {e}",
+                user_message="Unable to index document. Please try again.",
+            ) from e
 
     async def query(
         self,
@@ -343,13 +352,15 @@ class RAGEngine:
                 question, retrieved, llm_provider, llm_model
             )
 
+        except RAGQueryError:
+            # Re-raise our own exceptions without wrapping
+            raise
         except Exception as e:
-            logger.error(f"Error processing query: {e}")
-            return RAGResponse(
-                answer=f"Error processing query: {str(e)}",
-                contexts=[],
-                source_document_ids=[],
-            )
+            logger.exception("Error processing query")
+            raise RAGQueryError(
+                message=f"Query processing failed: {e}",
+                user_message="Unable to process your query. Please try again.",
+            ) from e
 
     async def _fetch_chunks_by_ids(self, chunk_ids: List[str]) -> List[RetrievedChunk]:
         """Fetch chunks by ID list (for cache hits)."""
@@ -439,15 +450,31 @@ Answer:"""
             source_document_ids=source_doc_ids,
         )
 
-    async def remove_document(self, document_id: str) -> bool:
-        """Remove a document's chunks from the vector store."""
+    async def remove_document(self, document_id: str) -> int:
+        """
+        Remove a document's chunks from the vector store.
+
+        Args:
+            document_id: Document ID to remove
+
+        Returns:
+            Number of chunks deleted
+
+        Raises:
+            RAGError: If deletion fails
+        """
         try:
             deleted_count = await self.vector_store.delete_document_chunks(document_id)
             logger.info(f"Deleted {deleted_count} chunks for document {document_id}")
-            return deleted_count > 0
+            return deleted_count
+        except RAGError:
+            raise
         except Exception as e:
-            logger.error(f"Error removing document {document_id}: {e}")
-            return False
+            logger.exception(f"Error removing document {document_id}")
+            raise RAGError(
+                message=f"Failed to remove document {document_id}: {e}",
+                user_message="Unable to remove document. Please try again.",
+            ) from e
 
 
 def create_rag_engine(

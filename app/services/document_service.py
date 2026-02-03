@@ -7,11 +7,16 @@ from datetime import datetime
 from typing import List, Optional
 from uuid import uuid4
 
+import logging
+
 from app.config import settings
 from app.core.pdf_parser import get_pdf_parser, ParsedDocument
 from app.core.rag_engine import RAGEngine
+from app.core.exceptions import RAGIndexError
 from app.db.database import async_session_maker
 from app.models.schemas import Document, DocumentUploadResponse
+
+logger = logging.getLogger(__name__)
 
 
 class DocumentService:
@@ -65,24 +70,22 @@ class DocumentService:
             doc.pageCount = parsed.page_count
 
             # Index in RAG engine
-            success = False
             async with async_session_maker() as session:
                 rag_engine = RAGEngine(session)
-                success = await rag_engine.index_document(document_id, parsed.blocks)
-                if success:
-                    await session.commit()
-                else:
-                    await session.rollback()
+                await rag_engine.index_document(document_id, parsed.blocks)
+                await session.commit()
 
-            if success:
-                doc.status = "ready"
-            else:
-                doc.status = "error"
-                doc.errorMessage = "Failed to index document"
+            doc.status = "ready"
+
+        except RAGIndexError as e:
+            logger.error(f"Failed to index document {document_id}: {e}")
+            doc.status = "error"
+            doc.errorMessage = e.user_message
 
         except Exception as e:
+            logger.exception(f"Unexpected error processing document {document_id}")
             doc.status = "error"
-            doc.errorMessage = str(e)
+            doc.errorMessage = "An unexpected error occurred while processing the document."
 
         return DocumentUploadResponse(
             documentId=document_id,
@@ -107,13 +110,13 @@ class DocumentService:
         try:
             async with async_session_maker() as session:
                 rag_engine = RAGEngine(session)
-                removed = await rag_engine.remove_document(document_id)
-                if removed:
-                    await session.commit()
-                else:
-                    await session.rollback()
+                deleted_count = await rag_engine.remove_document(document_id)
+                await session.commit()
+                logger.info(f"Removed {deleted_count} chunks for document {document_id}")
         except Exception:
-            pass
+            # Log but continue with deletion - vector cleanup failure
+            # shouldn't prevent document removal
+            logger.exception(f"Failed to remove vectors for document {document_id}")
 
         # Remove file
         file_path = os.path.join(settings.upload_dir, f"{document_id}.pdf")
